@@ -110,7 +110,8 @@ html, body {
   pointer-events: none;
 }
 #hotbar {
-  display: flex; gap: 10px;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  max-width: min(96vw, 1050px);
   background: rgba(12, 17, 28, 0.78);
   border: 1px solid rgba(120, 150, 200, 0.25);
   backdrop-filter: blur(12px);
@@ -119,7 +120,7 @@ html, body {
 }
 .hot-slot {
   position: relative;
-  width: 92px; height: 74px;
+  width: 86px; height: 72px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   background: rgba(22, 31, 48, 0.8);
   border: 1px solid rgba(120, 150, 200, 0.18);

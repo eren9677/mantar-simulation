@@ -8,6 +8,53 @@ const DIRS = [
 
 const MAX_TOTAL_MUSH = 900;
 
+function buildKernelTable(kind, R) {
+  const size = R * 2 + 1;
+  const weights = new Float64Array(size * size);
+  let sum = 0;
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      const d = Math.hypot(dx, dy);
+      let w = 0;
+      if (kind === "ballistic") w = d <= R ? 1 / (1 + d * 1.2) : 0;
+      else if (kind === "splash") w = d <= R ? Math.exp(-d / (R * 0.3)) : 0;
+      else if (kind === "wind") w = d <= R ? Math.exp(-(d * d) / (2 * (R * 0.28) ** 2)) : 0;
+      weights[(dy + R) * size + (dx + R)] = w;
+      sum += w;
+    }
+  }
+  const cum = new Float32Array(size * size);
+  let acc = 0;
+  for (let i = 0; i < size * size; i++) {
+    acc += weights[i] / sum;
+    cum[i] = acc;
+  }
+  return { size, R, cum };
+}
+
+function sampleKernel(k, u) {
+  let lo = 0, hi = k.cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (k.cum[mid] < u) lo = mid + 1;
+    else hi = mid;
+  }
+  const size = k.size;
+  return { dx: (lo % size) - k.R, dy: ((lo / size) | 0) - k.R };
+}
+
+function buildDefense(defs) {
+  const n = defs.length;
+  const m = new Float32Array(n * n);
+  for (let a = 0; a < n; a++) {
+    const vs = defs[a].vs || {};
+    for (let b = 0; b < n; b++) {
+      m[a * n + b] = defs[a].aggression + (vs[defs[b].id] || 0);
+    }
+  }
+  return m;
+}
+
 export class Simulation {
   constructor(defs) {
     this.defs = defs;
@@ -15,10 +62,17 @@ export class Simulation {
     this.myc = new Int8Array(N);
     this.health = new Float32Array(N);
     this.mushAt = new Int16Array(N);
+    this.growDir = new Int8Array(N);
     this.mushrooms = [];
     this.speciesCells = defs.map(() => []);
     this.signal = new Float32Array(N);
+    this.defense = buildDefense(defs);
+    this.kernels = defs.map((d) => {
+      if (d.spreadKernel === "network") return null;
+      return buildKernelTable(d.spreadKernel, Math.max(3, Math.ceil(d.sporeRange)));
+    });
     this.time = 0;
+    this.windAngle = 0;
     this._id = 0;
   }
 
@@ -31,6 +85,7 @@ export class Simulation {
   }
 
   occupy(i, si, h) {
+    if (si === 0) { this.clearCell(i); return; }
     const old = this.myc[i];
     if (old !== 0 && old !== si) this._removeFrom(old, i);
     if (this.myc[i] !== si) {
@@ -38,6 +93,14 @@ export class Simulation {
       this.speciesCells[si].push(i);
     }
     this.health[i] = h > 1 ? 1 : h;
+  }
+
+  clearCell(i) {
+    const si = this.myc[i];
+    if (si === 0) return;
+    this._removeFrom(si, i);
+    this.myc[i] = 0;
+    this.health[i] = 0;
   }
 
   _removeFrom(si, i) {
@@ -108,6 +171,7 @@ export class Simulation {
 
   tick(dt) {
     this.time += dt;
+    this.windAngle += dt * 0.05;
     const mush = this.mushrooms;
 
     for (let k = 0; k < mush.length; k++) {
@@ -117,6 +181,12 @@ export class Simulation {
       m.progress = Math.min(1, m.progress + dt / m.growthTime);
       if (m.age > m.lifetime) { this.kill(m.id); continue; }
       const def = this.defs[m.si];
+      if (def.puff && !m.puffed && m.progress >= 0.95) {
+        m.puffed = true;
+        const n = def.burst || 40;
+        for (let b = 0; b < n; b++) this.emitSpore(m, def);
+        m.lifetime = Math.min(m.lifetime, m.age + 6);
+      }
       if (m.progress > 0.6) {
         m.sporeT -= dt;
         if (m.sporeT <= 0) {
@@ -140,27 +210,58 @@ export class Simulation {
       while (n-- > 0) {
         const i = cells[(Math.random() * cells.length) | 0];
         const c = this.col(i), r = this.row(i);
-        const d = DIRS[(Math.random() * 8) | 0];
-        const nc = c + d[0], nr = r + d[1];
+        let d = (Math.random() * 8) | 0;
+        if (def.momentum && Math.random() < def.momentum) d = this.growDir[i];
+        const nc = c + DIRS[d][0], nr = r + DIRS[d][1];
         if (!this.inBounds(nc, nr)) continue;
         const t = this.idx(nc, nr);
         const other = this.myc[t];
         if (other === 0) {
           this.occupy(t, si, 0.35 + Math.random() * 0.3);
+          this.growDir[t] = d;
         } else if (other !== si) {
           if (Math.random() < this.fightChance(si, other, i, t)) {
             this.occupy(t, si, Math.max(0.4, this.health[t]));
+            this.growDir[t] = d;
           } else {
             this.health[t] -= 0.05;
           }
         }
+        if (def.prune) {
+          this.health[i] = Math.min(1, this.health[i] + 0.03);
+        }
+      }
+      if (def.prune && Math.random() < 0.05) {
+        for (let s = 0; s < 26; s++) {
+          const i = cells[(Math.random() * cells.length) | 0];
+          if (this.mushAt[i] !== 0) continue;
+          this.health[i] -= 0.02;
+          if (this.health[i] < 0.1) this.clearCell(i);
+        }
+      }
+      if (def.recycle) {
+        for (let s = 0; s < 20; s++) {
+          const i = cells[(Math.random() * cells.length) | 0];
+          if (this.health[i] > 0.5) this.health[i] -= 0.006;
+        }
       }
       if (cells.length > 3 && Math.random() < 0.6) {
-        for (let s = 0; s < 14; s++) {
-          const i = cells[(Math.random() * cells.length) | 0];
-          if (this.health[i] > 0.68 && this.mushAt[i] === 0 && Math.random() < 0.05) {
-            this.spawnMushroom(i, si);
-            break;
+        if (def.ring) {
+          for (let s = 0; s < 26; s++) {
+            const i = cells[(Math.random() * cells.length) | 0];
+            const h = this.health[i];
+            if (h > 0.42 && h < 0.75 && this.mushAt[i] === 0 && Math.random() < 0.07) {
+              this.spawnMushroom(i, si);
+              break;
+            }
+          }
+        } else {
+          for (let s = 0; s < 14; s++) {
+            const i = cells[(Math.random() * cells.length) | 0];
+            if (this.health[i] > 0.68 && this.mushAt[i] === 0 && Math.random() < 0.05) {
+              this.spawnMushroom(i, si);
+              break;
+            }
           }
         }
       }
@@ -168,24 +269,59 @@ export class Simulation {
   }
 
   fightChance(a, b, ia, ib) {
-    const da = this.defs[a].aggression * (0.6 + 0.4 * this.health[ia]);
-    const db = this.defs[b].aggression * (0.6 + 0.4 * this.health[ib]);
+    const n = this.nSpecies;
+    const da = this.defense[a * n + b] * (0.6 + 0.4 * this.health[ia]);
+    const db = this.defense[b * n + a] * (0.6 + 0.4 * this.health[ib]);
     return da / (da + db);
   }
 
   emitSpore(m, def) {
-    const t = m.x + (Math.random() * 2 - 1) * def.sporeRange;
-    const u = m.z + (Math.random() * 2 - 1) * def.sporeRange;
-    const cc = Math.max(0, Math.min(GRID - 1, Math.floor(t + GRID / 2)));
-    const rr = Math.max(0, Math.min(GRID - 1, Math.floor(u + GRID / 2)));
-    const cell = rr * GRID + cc;
+    const { tx, tz, cell, drift } = this.sporeTarget(m, def);
     return {
       sx: m.x, sy: 1.2 * m.scale + 0.5, sz: m.z,
-      cx: cc - GRID / 2 + 0.5, cz: rr - GRID / 2 + 0.5,
+      cx: tx, cz: tz,
       cell, si: m.si, t: 0,
-      dur: 0.6 + Math.random() * 0.5,
-      seed: Math.random() * 7,
+      dur: (def.spreadKernel === "wind" ? 1.2 : 0.6) + Math.random() * 0.5,
+      drift, seed: Math.random() * 7,
     };
+  }
+
+  sporeTarget(m, def) {
+    const kernel = def.spreadKernel || "ballistic";
+    if (kernel === "network") {
+      const cells = this.speciesCells[m.si];
+      let picked = null;
+      for (let tries = 0; tries < 14; tries++) {
+        const cand = cells[(Math.random() * cells.length) | 0];
+        const dx = (cand % GRID) - (m.x + GRID / 2);
+        const dy = ((cand / GRID) | 0) - (m.z + GRID / 2);
+        if (Math.hypot(dx, dy) <= def.sporeRange) { picked = cand; break; }
+      }
+      if (picked == null) picked = m.cell;
+      const c = picked % GRID, r = (picked / GRID) | 0;
+      return { tx: c - GRID / 2 + 0.5, tz: r - GRID / 2 + 0.5, cell: picked, drift: 1.1 };
+    }
+    const k = this.kernels[m.si];
+    const { dx, dy } = sampleKernel(k, Math.random());
+    let ox = dx, oz = dy;
+    let drift = 0.3;
+    if (kernel === "wind") {
+      const ca = Math.cos(this.windAngle), sa = Math.sin(this.windAngle);
+      const rx = ox * ca - oz * sa;
+      const rz = ox * sa + oz * ca;
+      ox = rx; oz = rz;
+      drift = 2.6;
+      if (def.fatTail && Math.random() < def.fatTail) {
+        ox *= 2.5;
+        oz *= 2.5;
+      }
+    } else if (kernel === "splash") {
+      drift = 0.9;
+    }
+    const tx = m.x + ox, tz = m.z + oz;
+    const cc = Math.max(0, Math.min(GRID - 1, Math.floor(tx + GRID / 2)));
+    const rr2 = Math.max(0, Math.min(GRID - 1, Math.floor(tz + GRID / 2)));
+    return { tx: cc - GRID / 2 + 0.5, tz: rr2 - GRID / 2 + 0.5, cell: rr2 * GRID + cc, drift };
   }
 
   landSpore(sp) {

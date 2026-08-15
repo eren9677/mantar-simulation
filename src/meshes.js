@@ -52,6 +52,10 @@ const BUILT_HEIGHT = {
   glowcap: 1.15,
   parasite: 1.1,
   giant: 3.7,
+  physarum: 1.0,
+  inkcap: 1.4,
+  puffball: 1.5,
+  earthstar: 0.7,
 };
 
 const shared = {};
@@ -237,12 +241,102 @@ function buildGiant(g, si, rand) {
   addShadow(g, 1.5);
 }
 
-const builders = { forest: buildForest, slime: buildSlime, coral: buildCoral, glowcap: buildGlowcap, parasite: buildParasite, giant: buildGiant };
+function buildPhysarum(g, si, rand) {
+  const def = SPECIES[si];
+  const mat = new THREE.MeshStandardMaterial({
+    color: def.color, metalness: 0.35, roughness: 0.4,
+    emissive: def.emissive, emissiveIntensity: 0.35,
+  });
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.45, 14, 10), mat);
+  core.scale.set(1.4, 0.7, 1.4);
+  core.position.y = 0.26;
+  g.add(core);
+  const tube = new THREE.CylinderGeometry(0.05, 0.07, 1, 6);
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + rand() * 0.7;
+    const len = 0.45 + rand() * 0.5;
+    const tg = new THREE.Group();
+    tg.rotation.y = a;
+    tg.position.y = 0.2;
+    const t = new THREE.Mesh(tube, mat);
+    t.rotation.z = Math.PI / 2;
+    t.scale.y = len;
+    t.position.x = 0.38 + len / 2;
+    tg.add(t);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.09 + rand() * 0.04, 8, 6), mat);
+    tip.position.x = 0.38 + len;
+    tg.add(tip);
+    g.add(tg);
+  }
+  addShadow(g, 0.6);
+}
+
+function buildInkcap(g, si, rand) {
+  const def = SPECIES[si];
+  const stem = new THREE.MeshStandardMaterial({ color: def.stemColor, metalness: 0.05, roughness: 0.75 });
+  const cap = new THREE.MeshStandardMaterial({ color: def.color, metalness: 0.15, roughness: 0.5 });
+  const s = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 1.0, 8), stem);
+  s.position.y = 0.5;
+  const c = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.55, 10), cap);
+  c.position.y = 1.1;
+  const skirt = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.035, 8, 14), stem);
+  skirt.rotation.x = Math.PI / 2;
+  skirt.position.y = 0.82;
+  g.add(s, c, skirt);
+  addShadow(g, 0.25);
+}
+
+function buildPuffball(g, si, rand) {
+  const def = SPECIES[si];
+  const mat = new THREE.MeshStandardMaterial({ color: def.color, metalness: 0.05, roughness: 0.85 });
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.8, 16, 12), mat);
+  const pos = ball.geometry.attributes.position;
+  const pv = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    pv.fromBufferAttribute(pos, i).normalize();
+    pv.multiplyScalar(1 + (rand() - 0.5) * 0.18);
+    pos.setXYZ(i, pv.x, pv.y, pv.z);
+  }
+  ball.geometry.computeVertexNormals();
+  ball.position.y = 0.7;
+  const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.35, 10), mat);
+  stalk.position.y = 0.18;
+  g.add(stalk, ball);
+  addShadow(g, 0.75);
+}
+
+function buildEarthstar(g, si, rand) {
+  const def = SPECIES[si];
+  const mat = new THREE.MeshStandardMaterial({ color: def.color, metalness: 0.25, roughness: 0.6 });
+  const inner = new THREE.MeshStandardMaterial({ color: def.stemColor, metalness: 0.2, roughness: 0.5 });
+  const arms = [];
+  const armCount = 7;
+  for (let i = 0; i < armCount; i++) {
+    const a = (i / armCount) * Math.PI * 2 + rand() * 0.4;
+    const ag = new THREE.Group();
+    ag.rotation.y = Math.PI / 2 - a;
+    const arm = new THREE.Mesh(new THREE.ConeGeometry(0.1 + rand() * 0.05, 0.55, 8), mat);
+    arm.position.z = 0.3;
+    ag.add(arm);
+    ag.position.y = 0.03;
+    g.add(ag);
+    arms.push(ag);
+  }
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), inner);
+  bulb.scale.set(1, 1.5, 1);
+  bulb.position.y = 0.15;
+  g.add(bulb);
+  g.userData.starArms = arms;
+  g.userData.starBulb = bulb;
+  addShadow(g, 0.65);
+}
+
+const builders = { forest: buildForest, slime: buildSlime, coral: buildCoral, glowcap: buildGlowcap, parasite: buildParasite, giant: buildGiant, physarum: buildPhysarum, inkcap: buildInkcap, puffball: buildPuffball, earthstar: buildEarthstar };
 
 export function buildMushroom(si, rand) {
   const def = SPECIES[si];
   const g = new THREE.Group();
   builders[def.kind](g, si, rand);
   const unit = BUILT_HEIGHT[def.kind];
-  return { group: g, unitScale: 1 / unit, yBias: def.kind === "coral" ? 1.45 : def.kind === "slime" ? 0.85 : 1 };
+  return { group: g, unitScale: 1 / unit, yBias: def.kind === "coral" ? 1.45 : def.kind === "slime" ? 0.85 : def.kind === "physarum" ? 0.9 : 1 };
 }

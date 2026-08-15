@@ -38,7 +38,7 @@ try {
 } catch (e) { /* env is optional */ }
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 400);
-camera.position.set(0, 30, 40);
+camera.position.set(0, 26, 34);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
@@ -142,18 +142,17 @@ const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 let selected = 0;
-let running = false;
+let running = true;
 let speed = 1;
 let rootsMode = false;
 let simAcc = 0;
+let modeAnim = null;
 
 const modes = {
-  surface: { pos: new THREE.Vector3(0, 30, 40), tgt: new THREE.Vector3(0, 0, 0), polar: Math.PI / 2.03, groundOp: 1, gridOp: 0.4 },
+  surface: { pos: new THREE.Vector3(0, 26, 34), tgt: new THREE.Vector3(0, 0, 0), polar: Math.PI / 2.03, groundOp: 1, gridOp: 0.4 },
   roots: { pos: new THREE.Vector3(18, -3.4, 18), tgt: new THREE.Vector3(0, 0, 0), polar: Math.PI * 0.6, groundOp: 0.04, gridOp: 0.06 },
 };
-const camPos = camera.position.clone();
-const camTgt = controls.target.clone();
-const rootLerp = (a, b, k) => a.lerp(b, k);
+const wind = { x: 0, z: 0 };
 
 function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
@@ -177,13 +176,17 @@ const ui = initUI({
   onRoots() {
     rootsMode = !rootsMode;
     ui.setRoots(rootsMode);
-    if (rootsMode) {
-      controls.maxPolarAngle = modes.roots.polar;
-      controls.minDistance = 2;
-    } else {
-      controls.maxPolarAngle = modes.surface.polar;
-      controls.minDistance = 4;
-    }
+    const m = rootsMode ? modes.roots : modes.surface;
+    controls.enabled = false;
+    modeAnim = {
+      t: 0,
+      fromPos: camera.position.clone(),
+      fromTgt: controls.target.clone(),
+      toPos: m.pos.clone(),
+      toTgt: m.tgt.clone(),
+    };
+    controls.maxPolarAngle = m.polar;
+    controls.minDistance = rootsMode ? 2 : 4;
   },
   onRandom() {
     for (let i = 0; i < 14; i++) {
@@ -281,9 +284,10 @@ let glowTimer = 0;
 function spawnFlightSpore(sp, dt) {
   sp.t += dt;
   const u = Math.min(1, sp.t / sp.dur);
-  const x = sp.sx + (sp.cx - sp.sx) * u;
-  const z = sp.sz + (sp.cz - sp.sz) * u;
-  const y = sp.sy + (0.3 - sp.sy) * u + Math.sin(Math.PI * u) * 1.2 + Math.sin(u * 9 + sp.seed) * 0.1;
+  const lift = Math.sin(Math.PI * u);
+  const x = sp.sx + (sp.cx - sp.sx) * u + lift * wind.x * sp.drift;
+  const z = sp.sz + (sp.cz - sp.sz) * u + lift * wind.z * sp.drift;
+  const y = sp.sy + (0.3 - sp.sy) * u + lift * 1.2 + Math.sin(u * 9 + sp.seed) * 0.1;
   return { x, y, z };
 }
 
@@ -303,6 +307,8 @@ function renderLoop(now) {
   if (shared.glowcap) {
     shared.glowcap.emissiveIntensity = 0.7 + 0.45 * Math.sin(t * 2.5);
   }
+  wind.x = Math.sin(t * 0.06) * 0.45;
+  wind.z = Math.cos(t * 0.043) * 0.45;
 
   for (let k = spores.length - 1; k >= 0; k--) {
     const sp = spores[k];
@@ -340,13 +346,19 @@ function renderLoop(now) {
     const g = m.group;
     const base = m.scale * m.unitScale;
     if (!m.dead) {
-      const p = easeOutCubic(m.progress);
+      const p = 0.14 + 0.86 * easeOutCubic(m.progress);
       const wob = m.si === 1 ? 1 + 0.05 * Math.sin(t * 2.4 + m.wobPhase) : 1;
       const sy = m.si === 1 ? 1 + 0.05 * Math.sin(t * 3.1 + m.wobPhase * 1.7) : m.yBias;
       g.scale.set(base * p * wob, base * p * sy, base * p * wob);
       if (m.haloRef) {
         const s = (1.7 + 0.25 * Math.sin(t * 2.5 + m.wobPhase)) * (0.4 + 0.6 * p);
         m.haloRef.scale.set(s, s, 1);
+      }
+      const arms = g.userData.starArms;
+      if (arms) {
+        const open = easeOutCubic(m.progress);
+        for (const ag of arms) ag.rotation.x = (Math.PI / 2) * open;
+        g.userData.starBulb.position.y = 0.12 + 0.3 * open;
       }
     } else {
       m.shrinkT += dt;
@@ -413,15 +425,20 @@ function renderLoop(now) {
 
   const damp = 1 - Math.pow(0.001, dt);
   const mode = rootsMode ? modes.roots : modes.surface;
-  camPos.copy(camera.position).lerp(mode.pos, damp);
-  camera.position.copy(camPos);
-  camTgt.copy(controls.target).lerp(mode.tgt, damp);
-  controls.target.copy(camTgt);
+  if (modeAnim) {
+    modeAnim.t += dt;
+    const k = Math.min(1, modeAnim.t / 0.7);
+    const e = 1 - Math.pow(1 - k, 3);
+    camera.position.lerpVectors(modeAnim.fromPos, modeAnim.toPos, e);
+    controls.target.lerpVectors(modeAnim.fromTgt, modeAnim.toTgt, e);
+    if (k >= 1) {
+      modeAnim = null;
+      controls.enabled = true;
+    }
+  }
   GROUND_MAT.opacity += (mode.groundOp - GROUND_MAT.opacity) * damp;
   fineGrid.material.opacity += (mode.gridOp - fineGrid.material.opacity) * damp;
   coarseGrid.material.opacity += (mode.gridOp + 0.05 - coarseGrid.material.opacity) * damp;
-
-  if (mush.length && sigArr) { /* noop */ }
 
   controls.update();
   renderer.render(scene, camera);
