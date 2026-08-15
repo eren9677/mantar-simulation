@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mantar Simülasyonu — Deneysel Ekosistem</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="vignette"></div>
+
+  <header id="hud-top">
+    <div class="title-block">
+      <h1>🍄 Mantar Simülasyonu</h1>
+      <p>Deneysel ekosistem — kök ağları, rekabet ve evrimleşen koloniler</p>
+    </div>
+
+    <div class="transport">
+      <button id="playBtn" class="btn play">▶ Başlat</button>
+      <div id="speedChips"></div>
+      <div id="timeLabel" class="time">T+00:00</div>
+    </div>
+
+    <div class="actions">
+      <button id="rootsBtn" class="btn">🕸️ Yer Altı</button>
+      <button id="randomBtn" class="btn">🌰 Rastgele Ekosistem</button>
+      <button id="stormBtn" class="btn">🌬️ Spor Fırtınası</button>
+      <button id="clearBtn" class="btn danger">🗑️ Temizle</button>
+      <span id="badge" class="badge"></span>
+    </div>
+  </header>
+
+  <aside id="statsBox" class="panel"></aside>
+
+  <footer id="hud-bottom">
+    <div id="hotbar"></div>
+    <p id="hint">Sol tık: mantar dik · Sağ tık: sök · 1–6: tür seç · Boşluk: başlat/duraklat · R: yer altı</p>
+  </footer>
+
+  <div id="markerInfo" class="marker-info"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
